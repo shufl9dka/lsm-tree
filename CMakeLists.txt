@@ -4,7 +4,7 @@ project(idx_lsm_tree)
 file(GLOB_RECURSE sources   src/*.cpp src/*.h src/.hpp)
 
 add_executable(lsm_bench ${sources})
-target_compile_options(lsm_bench PUBLIC -std=c++1y -Wall -Wfloat-conversion)
+target_compile_options(lsm_bench PUBLIC -std=c++20 -fno-stack-protector)
 target_include_directories(lsm_bench PUBLIC src)
 
 install(TARGETS lsm_bench DESTINATION example_destination)

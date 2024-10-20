@@ -1,29 +1,47 @@
 #ifndef SSTABLE_H
 #define SSTABLE_H
 
-#include <string>
-#include "bloom/bloom_filter.h"
+#include "bloom_filter.h"
 #include "memtable.h"
 
-const size_t BLOOM_SIZE = 128 * 1024;
+#include <fstream>
+#include <string>
+
+const size_t BLOOM_SIZE = 64 * 1024;
+const size_t BUFFER_SIZE = 1024;
+
+const char KEY_TOKEN = '\0';
+const char VALUE_TOKEN = '\1';
 
 class SSTable {
 public:
+    using TKeyValue = std::pair<std::string, std::string>;
+
     // loads SSTable from `filepath`
     explicit SSTable(const std::string& filepath);
 
     // writes memTable to disk at `filepath` file
-    SSTable(const std::string& filepath, MemTable&& memTable);
+    SSTable(const std::string& filepath, MemTable& memTable);
 
     // merges `toMerge` SSTables into `this` SSTable and writes it to `filepath`
     // `toMerge` is ordered from the least to most recent (toMerge[0] is later then toMerge[1])
-    SSTable(const std::string& filepath, const std::vector<SSTable>& toMerge);
+    SSTable(const std::string& filepath, std::vector<SSTable>& toMerge);
 
-    std::string At(const std::string& key);
+    std::optional<std::string> At(const std::string& key);
+
+    void Clear();
 
 private:
+    void OpenReadFile();
+
+    void CloseReadFile();
+
+    std::optional<TKeyValue> GetNextKV(std::optional<std::streampos> startPos = std::nullopt);
+
     BloomFilter<BLOOM_SIZE> _bloom_filter;
     std::string _filepath;
+    std::ifstream _file;
+    std::streampos _stopPos;
 };
 
 #endif

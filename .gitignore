@@ -42,6 +42,7 @@ include/divisible/*
 
 ## Local 
 
+**/lsm_test
 lsm_bench
 *.cmake
 

@@ -9,7 +9,7 @@ class MemTable {
 public:
     std::optional<std::string> At(const std::string& key) {
         if (!_map.contains(key)) {
-            return {};
+            return std::nullopt;
         }
         return _map[key];
     }
@@ -18,6 +18,8 @@ public:
         _map[key] = value;
         return _map.size();
     }
+
+    friend class SSTable;
 
 private:
     std::unordered_map<std::string, std::string> _map;
