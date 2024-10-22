@@ -79,11 +79,10 @@ void LSMTree::Put(const std::string& key, const std::string& value) {
         }
 
         std::string filepath = _dirpath + "/" + GenerateSSTableFilename(0);
-        _levels[0].emplace_back(filepath, _memTable);
+        SSTable table(filepath, _memTable);
+        _levels[0].push_back(std::move(table));
 
-        std::cout << "gaaaay" << std::endl;
         CompactLevel(0);
-        std::cout << "down" << std::endl;
     }
 }
 
@@ -94,13 +93,10 @@ std::string LSMTree::GenerateSSTableFilename(size_t level) {
 
 void LSMTree::CompactLevel(size_t level) {
     if (level >= _levels.size()) {
-        std::cout << "nolevel" << std::endl;
         return;
     }
 
-    std::cout << "checker" << std::endl;
     if (_levels[level].size() >= MAX_LEVEL_RUNS) {
-        std::cout << "compaaact" << std::endl;
         std::vector<SSTable> toMerge;
         for (size_t i = 0; i < MAX_LEVEL_RUNS; ++i) {
             toMerge.push_back(std::move(_levels[level][i]));
@@ -113,11 +109,8 @@ void LSMTree::CompactLevel(size_t level) {
         if (_levels.size() <= static_cast<size_t>(level + 1)) {
             _levels.emplace_back();
         }
-        std::cout << "viva";
         SSTable newTable(filepath, toMerge);
-        std::cout << "giga?" << std::endl;
         _levels[level + 1].push_back(std::move(newTable));
-        std::cout << "jija" << std::endl;
         CompactLevel(level + 1);
     }
 }

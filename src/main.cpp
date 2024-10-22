@@ -8,15 +8,13 @@
 #include <algorithm>
 
 int main() {
-    // Remove any existing LSM tree data from previous runs
     const std::string lsm_dir = "./lsm_test";
     std::filesystem::remove_all(lsm_dir);
 
     // Set up the LSM Tree
     LSMTree tree(lsm_dir);
-    std::cout << "ok" << std::endl;
 
-    const int NUM_INSERTS = 100000; // Number of key-value pairs to insert
+    const int NUM_INSERTS = 50000; // Number of key-value pairs to insert
     const int NUM_LOOKUPS = 10000;  // Number of key lookups to perform
 
     // Generate unique keys and corresponding values
@@ -33,7 +31,6 @@ int main() {
     std::shuffle(keys.begin(), keys.end(), rng);
 
     // Benchmark insertions
-    std::cout << "AMOGIUM" << std::endl;
     auto start_insert = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < NUM_INSERTS; ++i) {
         tree.Put(keys[i], values[i]);
@@ -46,7 +43,7 @@ int main() {
     // Prepare keys for lookup (some existing, some non-existing)
     std::uniform_int_distribution<int> dist(0, NUM_INSERTS - 1);
     std::vector<std::string> lookup_keys;
-    int num_existing_keys = NUM_LOOKUPS / 2;
+    int num_existing_keys = NUM_LOOKUPS;
 
     // Add existing keys to lookup
     for (int i = 0; i < num_existing_keys; ++i) {

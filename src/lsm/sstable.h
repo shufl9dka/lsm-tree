@@ -16,6 +16,7 @@ const char VALUE_TOKEN = '\1';
 class SSTable {
 public:
     using TKeyValue = std::pair<std::string, std::string>;
+    using TKVPos = std::pair<TKeyValue, std::pair<std::streampos, std::streampos>>;
 
     // loads SSTable from `filepath`
     explicit SSTable(const std::string& filepath);
@@ -36,7 +37,9 @@ private:
 
     void CloseReadFile();
 
-    std::optional<TKeyValue> GetNextKV(std::optional<std::streampos> startPos = std::nullopt);
+    size_t ReadToBuf(char* buffer, size_t max, std::optional<std::streampos> startPos = std::nullopt);
+
+    std::optional<TKVPos> GetNextKV(std::optional<std::streampos> startPos = std::nullopt, std::optional<std::streampos> stopPos = std::nullopt);
 
     BloomFilter<BLOOM_SIZE> _bloom_filter;
     std::string _filepath;

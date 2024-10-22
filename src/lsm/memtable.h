@@ -19,6 +19,8 @@ public:
         return _map.size();
     }
 
+    inline size_t size() const noexcept { return _map.size(); }
+
     friend class SSTable;
 
 private:

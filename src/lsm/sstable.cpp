@@ -25,9 +25,9 @@ SSTable::SSTable(const std::string& filepath) : _filepath(filepath) {
         throw std::runtime_error("Failed to open SSTable file for reading");
     }
 
-    file.seekg(-std::streamoff(_bloom_filter._bitset.size()), std::ios::end);
+    file.seekg(-std::streamoff(_bloom_filter.SizeBytes()), std::ios::end);
     _stopPos = file.tellg();
-    file.read(reinterpret_cast<char*>(_bloom_filter._bitset.data()), _bloom_filter._bitset.size());
+    file.read(reinterpret_cast<char*>(_bloom_filter.Data()), _bloom_filter.SizeBytes());
 }
 
 SSTable::SSTable(const std::string& filepath, MemTable& memTable) : _filepath(filepath) {
@@ -36,49 +36,49 @@ SSTable::SSTable(const std::string& filepath, MemTable& memTable) : _filepath(fi
         throw std::runtime_error("Failed to open SSTable file for writing");
     }
 
-    std::cout << "gop1" << std::endl;
     std::unordered_map<std::string, std::string> mem(std::move(memTable._map));
-    memTable._map.clear();
+    // here, memTable is free to be used in another thread so we can do the part below in background
 
-    _bloom_filter = BloomFilter<BLOOM_SIZE>(mem.size());
-    std::cout << "gop2" << std::endl;
+    std::vector<std::pair<std::string, std::string>> ssv;
+    ssv.reserve(mem.size());
+    while (!mem.empty()) {
+        auto it = mem.begin();
+        ssv.emplace_back(std::move(it->first), std::move(it->second));
+        mem.erase(it);
+    }
+    std::sort(ssv.begin(), ssv.end());
 
-    std::cout << "filter gool" << std::endl;
-    std::cout << mem.size() << std::endl;
-    for (const auto& [key, value] : mem) {
+    _bloom_filter.UpdateHashes(ssv.size());
+    for (const auto& [key, value] : ssv) {
         _bloom_filter.Put(key);
         file << KEY_TOKEN << key << VALUE_TOKEN << value;
     }
 
-    file.write(reinterpret_cast<char*>(_bloom_filter._bitset.data()), _bloom_filter._bitset.size());
+    file.write(reinterpret_cast<char*>(_bloom_filter.Data()), _bloom_filter.SizeBytes());
     file.close();
 
     std::ifstream inp(filepath, std::ios::binary | std::ios::ate);
-    _stopPos = inp.tellg() - std::streampos(_bloom_filter._bitset.size());
+    _stopPos = inp.tellg() - std::streampos(_bloom_filter.SizeBytes());
 }
 
 SSTable::SSTable(const std::string& filepath, std::vector<SSTable>& toMerge) : _filepath(filepath) {
-    std::cout << "ok1" << std::endl;
     std::ofstream file(filepath, std::ios::binary);
     if (!file) {
         throw std::runtime_error("Failed to open SSTable file for writing");
     }
-    std::cout << "ok2" << std::endl;
 
     std::priority_queue<_KVfromSST> pq;
     auto updatePqWithTable = [&](size_t idx) {
-        std::optional<TKeyValue> kv = toMerge[idx].GetNextKV();
+        std::optional<TKVPos> kv = toMerge[idx].GetNextKV();
         if (kv.has_value()) {
-            pq.emplace(*kv, idx);
+            pq.emplace((*kv).first, idx);
         }
     };
 
-    std::cout << "MERGE1" << std::endl;
     for (size_t i = 0; i < toMerge.size(); ++i) {
         updatePqWithTable(i);
     }
 
-    std::cout << "MERGE2" << std::endl;
     while (!pq.empty()) {
         const auto& best = pq.top(); pq.pop();
 
@@ -89,18 +89,17 @@ SSTable::SSTable(const std::string& filepath, std::vector<SSTable>& toMerge) : _
     for (const auto& ssTable : toMerge) {
         _bloom_filter.Extend(ssTable._bloom_filter);
     }
-    file.write(reinterpret_cast<char*>(_bloom_filter._bitset.data()), _bloom_filter._bitset.size());
+    file.write(reinterpret_cast<char*>(_bloom_filter.Data()), _bloom_filter.SizeBytes());
     file.close();
 
     std::ifstream inp(filepath, std::ios::binary | std::ios::ate);
-    _stopPos = inp.tellg() - std::streampos(_bloom_filter._bitset.size());
+    _stopPos = inp.tellg() - std::streampos(_bloom_filter.SizeBytes());
     inp.close();
 
     for (auto& ssTable : toMerge) {
         ssTable.Clear();
     }
     toMerge.clear();
-    std::cout << "clean" << std::endl;
 }
 
 std::optional<std::string> SSTable::At(const std::string& key) {
@@ -113,102 +112,44 @@ std::optional<std::string> SSTable::At(const std::string& key) {
     std::streampos low = 0;
     std::streampos high = _stopPos;
 
-    auto findNextKeyTokenPos = [&](std::streampos pos, std::streampos high) -> std::optional<std::streampos> {
-        std::vector<char> buffer(BUFFER_SIZE);
-        while (pos <= high) {
-            _file.seekg(pos);
-            size_t toRead = std::min(std::streamoff(BUFFER_SIZE), high - pos + 1);
-            _file.read(buffer.data(), toRead);
-            size_t readCount = _file.gcount();
-
-            for (size_t i = 0; i < readCount; ++i) {
-                if (buffer[i] == KEY_TOKEN) {
-                    return pos + std::streamoff(i);
-                }
-            }
-            if (readCount < toRead) {
-                break;
-            }
-
-            pos += std::streamoff(readCount);
-        }
-        return std::nullopt;
-    };
-
-    auto getKeyValueAt = [&](std::streampos keyTokenPos) -> std::optional<std::pair<TKeyValue, std::streampos>> {
-        _file.clear(); // EOF flags
-        _file.seekg(keyTokenPos);
-
-        char ch;
-        _file.get(ch);
-        if (!_file || ch != KEY_TOKEN) {
-            return std::nullopt;
-        }
-
-        std::string keyRead;
-        while (_file.get(ch)) {
-            if (ch == VALUE_TOKEN) {
-                break;
-            }
-            keyRead += ch;
-        }
-        if (!_file) {
-            return std::nullopt;
-        }
-
-        std::string valueRead;
-        while (_file.get(ch)) {
-            if (ch == KEY_TOKEN) {
-                _file.unget();
-                break;
-            }
-            valueRead += ch;
-            if (_file.tellg() >= _stopPos) {
-                break;
-            }
-        }
-
-        std::streampos nextPos = _file.tellg();
-        if (!_file) {
-            nextPos = _stopPos;
-        }
-
-        return std::make_optional(std::make_pair(std::make_pair(keyRead, valueRead), nextPos));
-    };
-
-    while (low <= high) {
+    while (high - low > 8 * BUFFER_SIZE) {
         std::streampos mid = low + (high - low) / 2;
 
-        auto optKeyTokenPos = findNextKeyTokenPos(mid, high);
-        if (!optKeyTokenPos.has_value()) {
+        auto kvPos = GetNextKV(mid, int64_t(high) + 1);
+        if (!kvPos.has_value()) {
             high = mid - std::streamoff(1);
             continue;
         }
-        std::streampos keyTokenPos = optKeyTokenPos.value();
 
-        auto kvOpt = getKeyValueAt(keyTokenPos);
-        if (!kvOpt.has_value()) {
-            high = mid - std::streamoff(1);
-            continue;
-        }
-        auto kvPos = kvOpt.value();
-
-        if (kvPos.first.first < key) {          // found is less
-            low = kvPos.second;
-        } else if (kvPos.first.first == key) {  // good key
+        auto [kv, keyPos] = kvPos.value();
+        if (kv.first < key) {           // found is less
+            low = keyPos.second;
+        } else if (kv.first == key) {   // good key
             CloseReadFile();
-            return kvPos.first.second;
-        } else {                                // found is
-            if (keyTokenPos > 0) {
-                high = keyTokenPos - std::streamoff(1);
+            return kv.second;
+        } else {                        // found is greater
+            if (keyPos.first > low) {   // and not on the beggining
+                high = keyPos.first - std::streamoff(1);
             } else {
                 break;
             }
         }
     }
 
+    std::vector<char> buffer(high - low + 1);
+    size_t sz = ReadToBuf(buffer.data(), high - low + 1, low);
     CloseReadFile();
-    return std::nullopt;
+
+    std::string line(buffer.begin(), buffer.begin() + sz);
+    std::string toFind = std::string() + KEY_TOKEN + key + VALUE_TOKEN;
+    size_t keyBegin = line.find(toFind);
+    if (keyBegin == std::string::npos) {
+        return std::nullopt;
+    }
+
+    size_t valueStart = keyBegin + toFind.size();
+    size_t valueEnd = std::min(line.size(), line.find(KEY_TOKEN, valueStart));
+    return line.substr(valueStart, valueEnd - valueStart);
 }
 
 void SSTable::OpenReadFile() {
@@ -219,6 +160,18 @@ void SSTable::CloseReadFile() {
     _file.close();
 }
 
+size_t SSTable::ReadToBuf(char* buffer, size_t max, std::optional<std::streampos> startPos) {
+    if (!_file.is_open()) {
+        OpenReadFile();
+    }
+    if (startPos.has_value()) {
+        _file.seekg(*startPos);
+    }
+
+    _file.read(buffer, max);
+    return _file.gcount();
+}
+
 void SSTable::Clear() {
     if (_file.is_open()) {
         CloseReadFile();
@@ -227,7 +180,7 @@ void SSTable::Clear() {
     std::remove(_filepath.c_str());
 }
 
-std::optional<SSTable::TKeyValue> SSTable::GetNextKV(std::optional<std::streampos> startPos) {
+std::optional<SSTable::TKVPos> SSTable::GetNextKV(std::optional<std::streampos> startPos, std::optional<std::streampos> stopPos) {
     if (!_file.is_open()) {
         OpenReadFile();
     }
@@ -240,32 +193,48 @@ std::optional<SSTable::TKeyValue> SSTable::GetNextKV(std::optional<std::streampo
 
     int state = 0;
     size_t pos = _file.tellg();
-    while (pos < static_cast<size_t>(_stopPos)) {
-        _file.read(buffer.data(), std::min(BUFFER_SIZE, static_cast<size_t>(_stopPos) - pos));
-        size_t appended = _file.gcount();
+    std::streampos keyPos;
+    std::streampos lStopPos = (stopPos.has_value()) ? std::min(*stopPos, _stopPos) : _stopPos;
+
+    while (pos < static_cast<size_t>(lStopPos)) {
+        size_t appended = ReadToBuf(buffer.data(), std::min(BUFFER_SIZE, static_cast<size_t>(lStopPos) - pos));
 
         for (size_t i = 0; i < appended; ++i, ++pos) {
             char ch = buffer[i];
             if (ch == KEY_TOKEN) {
-                if (state == 2) {
-                    _file.seekg(std::streampos(pos + 1));
-                    return std::make_optional<TKeyValue>(key, value);
-                } else {
+                if (state == 0) {
+                    keyPos = pos;
                     state = 1;
                     continue;
+                } else {
+                    auto nextPos = std::streampos(pos + 1);
+                    _file.seekg(nextPos);
+                    return std::make_optional(
+                        std::make_pair(
+                            std::make_pair(key, value),
+                            std::make_pair(keyPos, nextPos)
+                        )
+                    );
                 }
             }
             if (ch == VALUE_TOKEN && state == 1) {
                 state = 2;
                 continue;
             }
-            (state == 1 ? key : value) += ch;
+            if (state != 0) {
+                (state == 1 ? key : value) += ch;
+            }
         }
     }
 
     if (key.empty()) {
         return std::nullopt;
     } else {
-        return std::make_optional<TKeyValue>(key, value);
+        return std::make_optional(
+            std::make_pair(
+                std::make_pair(key, value),
+                std::make_pair(keyPos, pos)
+            )
+        );
     }
 }
