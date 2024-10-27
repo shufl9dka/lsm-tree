@@ -50,6 +50,10 @@ SSTable::SSTable(const std::string& filepath, MemTable& memTable) : _filepath(fi
 
     _bloom_filter.UpdateHashes(ssv.size());
     for (const auto& [key, value] : ssv) {
+        if (key == "key42117") {
+            std::cout << "Found in dump from memtable, filename is " << filepath << std::endl;
+        }
+
         _bloom_filter.Put(key);
         file << KEY_TOKEN << key << VALUE_TOKEN << value;
     }
@@ -71,7 +75,7 @@ SSTable::SSTable(const std::string& filepath, std::vector<SSTable>& toMerge) : _
     auto updatePqWithTable = [&](size_t idx) {
         std::optional<TKVPos> kv = toMerge[idx].GetNextKV();
         if (kv.has_value()) {
-            pq.emplace((*kv).first, idx);
+            pq.emplace(kv->first, idx);
         }
     };
 
@@ -79,11 +83,17 @@ SSTable::SSTable(const std::string& filepath, std::vector<SSTable>& toMerge) : _
         updatePqWithTable(i);
     }
 
+    std::string prevKey;
     while (!pq.empty()) {
-        const auto& best = pq.top(); pq.pop();
+        const auto& best = pq.top();
+        if (best.kv.first != prevKey) {
+            file << KEY_TOKEN << best.kv.first << VALUE_TOKEN << best.kv.second;
+            prevKey = best.kv.first;
+        }
 
-        file << KEY_TOKEN << best.kv.first << VALUE_TOKEN << best.kv.second;
-        updatePqWithTable(best.i);
+        size_t i = best.i;
+        pq.pop();
+        updatePqWithTable(i);
     }
 
     for (const auto& ssTable : toMerge) {
@@ -152,8 +162,14 @@ std::optional<std::string> SSTable::At(const std::string& key) {
     return line.substr(valueStart, valueEnd - valueStart);
 }
 
-void SSTable::OpenReadFile() {
-    _file.open(_filepath, std::ios::binary);
+void SSTable::OpenReadFile(std::optional<std::streampos> startPos) {
+    if (!_file.is_open()) {
+        _file.open(_filepath, std::ios::binary);
+    }
+
+    if (startPos.has_value()) {
+        _file.seekg(*startPos);
+    }
 }
 
 void SSTable::CloseReadFile() {
@@ -161,12 +177,7 @@ void SSTable::CloseReadFile() {
 }
 
 size_t SSTable::ReadToBuf(char* buffer, size_t max, std::optional<std::streampos> startPos) {
-    if (!_file.is_open()) {
-        OpenReadFile();
-    }
-    if (startPos.has_value()) {
-        _file.seekg(*startPos);
-    }
+    OpenReadFile(startPos);
 
     _file.read(buffer, max);
     return _file.gcount();
@@ -181,12 +192,7 @@ void SSTable::Clear() {
 }
 
 std::optional<SSTable::TKVPos> SSTable::GetNextKV(std::optional<std::streampos> startPos, std::optional<std::streampos> stopPos) {
-    if (!_file.is_open()) {
-        OpenReadFile();
-    }
-    if (startPos.has_value()) {
-        _file.seekg(*startPos);
-    }
+    OpenReadFile(startPos);
 
     std::vector<char> buffer(BUFFER_SIZE);
     std::string key, value;
@@ -207,7 +213,7 @@ std::optional<SSTable::TKVPos> SSTable::GetNextKV(std::optional<std::streampos> 
                     state = 1;
                     continue;
                 } else {
-                    auto nextPos = std::streampos(pos + 1);
+                    auto nextPos = std::streampos(pos);
                     _file.seekg(nextPos);
                     return std::make_optional(
                         std::make_pair(

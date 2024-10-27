@@ -7,70 +7,60 @@
 #include <filesystem>
 #include <algorithm>
 
-int main() {
-    const std::string lsm_dir = "./lsm_test";
-    std::filesystem::remove_all(lsm_dir);
+std::mt19937 rng(42);
 
-    // Set up the LSM Tree
-    LSMTree tree(lsm_dir);
-
-    const int NUM_INSERTS = 50000; // Number of key-value pairs to insert
-    const int NUM_LOOKUPS = 10000;  // Number of key lookups to perform
-
-    // Generate unique keys and corresponding values
-    std::vector<std::string> keys;
-    std::vector<std::string> values;
-
-    for (int i = 0; i < NUM_INSERTS; ++i) {
+auto prepareKeysValues(size_t nRuns) {
+    std::vector<std::string> keys, values;
+    for (size_t i = 0; i < nRuns; ++i) {
         keys.push_back("key" + std::to_string(i));
         values.push_back("value" + std::to_string(i));
     }
 
-    // Shuffle the keys to insert them in random order
-    std::mt19937 rng(12345);
     std::shuffle(keys.begin(), keys.end(), rng);
+    std::shuffle(values.begin(), values.end(), rng);
+    return std::make_pair(keys, values);
+}
 
-    // Benchmark insertions
-    auto start_insert = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < NUM_INSERTS; ++i) {
+int main(int argc, char *argv[]) {
+    int nRuns = std::atoi(argv[1]);
+    int nLookups = std::atoi(argv[2]);
+    std::cout << "nRuns = " << nRuns << ", nLookups = " << nLookups << std::endl;
+
+    const std::string testDir = "./lsm_test";
+    std::filesystem::remove_all(testDir);
+    LSMTree tree(testDir);
+
+    auto [keys, values] = prepareKeysValues(nRuns);
+    std::cout << keys.size() << " " << values.size() << std::endl;
+
+    std::cout << "Starting insert phase" << std::endl;
+    auto startInsert = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < nRuns; ++i) {
         tree.Put(keys[i], values[i]);
     }
-    auto end_insert = std::chrono::high_resolution_clock::now();
-    auto insert_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_insert - start_insert);
-    std::cout << "Inserted " << NUM_INSERTS << " key-value pairs in " << insert_duration.count() << " ms\n";
-    std::cout << "Insertion throughput: " << (NUM_INSERTS * 1000.0 / insert_duration.count()) << " ops/sec\n";
+    auto endInsert = std::chrono::high_resolution_clock::now();
+    auto insertPhase = std::chrono::duration_cast<std::chrono::milliseconds>(endInsert - startInsert);
 
-    // Prepare keys for lookup (some existing, some non-existing)
-    std::uniform_int_distribution<int> dist(0, NUM_INSERTS - 1);
-    std::vector<std::string> lookup_keys;
-    int num_existing_keys = NUM_LOOKUPS;
+    std::cout << "Inserted " << nRuns << " key-value pairs in " << insertPhase.count() << " ms" << std::endl;
+    std::cout << "Insertion throughput: " << (nRuns * 1000.0 / insertPhase.count()) << " ops/sec" << std::endl;
 
-    // Add existing keys to lookup
-    for (int i = 0; i < num_existing_keys; ++i) {
-        lookup_keys.push_back("key" + std::to_string(dist(rng)));
-    }
-    // Add non-existing keys to lookup
-    for (int i = 0; i < NUM_LOOKUPS - num_existing_keys; ++i) {
-        lookup_keys.push_back("nonexistent_key" + std::to_string(dist(rng)));
-    }
-
-    // Shuffle lookup keys
-    std::shuffle(lookup_keys.begin(), lookup_keys.end(), rng);
-
-    // Benchmark lookups
-    int found = 0;
-    auto start_lookup = std::chrono::high_resolution_clock::now();
-    for (const auto& key : lookup_keys) {
-        auto value = tree.At(key);
+    size_t found = 0;
+    size_t incorrect = 0;
+    auto startLookup = std::chrono::high_resolution_clock::now();
+    for (size_t step = 0; step < nLookups; ++step) {
+        size_t i = rng() % nRuns;
+        auto value = tree.At(keys[i]);
         if (value.has_value()) {
             ++found;
+            incorrect += static_cast<size_t>(*value != values[i]);
         }
     }
-    auto end_lookup = std::chrono::high_resolution_clock::now();
-    auto lookup_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_lookup - start_lookup);
-    std::cout << "Looked up " << NUM_LOOKUPS << " keys in " << lookup_duration.count() << " ms\n";
-    std::cout << "Found " << found << " keys out of " << NUM_LOOKUPS << "\n";
-    std::cout << "Lookup throughput: " << (NUM_LOOKUPS * 1000.0 / lookup_duration.count()) << " ops/sec\n";
+    auto endLookup = std::chrono::high_resolution_clock::now();
+    auto lookupPhase = std::chrono::duration_cast<std::chrono::milliseconds>(endLookup - startLookup);
+
+    std::cout << "Looked up " << nLookups << " keys in " << lookupPhase.count() << " ms" << std::endl;
+    std::cout << "Found " << found << " of " << nLookups << " keys, " << incorrect << " has incorrect values" << std::endl;
+    std::cout << "Lookup throughput: " << (nLookups * 1000.0 / lookupPhase.count()) << " ops/sec" << std::endl;
 
     return 0;
 }

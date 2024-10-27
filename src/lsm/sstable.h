@@ -8,7 +8,7 @@
 #include <string>
 
 const size_t BLOOM_SIZE = 64 * 1024;
-const size_t BUFFER_SIZE = 1024;
+const size_t BUFFER_SIZE = 512;
 
 const char KEY_TOKEN = '\0';
 const char VALUE_TOKEN = '\1';
@@ -33,7 +33,7 @@ public:
     void Clear();
 
 private:
-    void OpenReadFile();
+    void OpenReadFile(std::optional<std::streampos> startPos = std::nullopt);
 
     void CloseReadFile();
 
